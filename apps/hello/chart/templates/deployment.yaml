@@ -43,7 +43,10 @@ spec:
           type: RuntimeDefault
       containers:
         - name: hello
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          # required, not a default: an unset tag means nothing has been
+          # promoted to this stage yet, and failing to render says so where a
+          # silent "latest" would quietly deploy the newest build instead.
+          image: "{{ .Values.image.repository }}:{{ required "image.tag is required: it is written per stage by Kargo when a release is promoted (docs/hello-app.md)." .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false

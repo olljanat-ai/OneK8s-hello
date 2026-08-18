@@ -1,0 +1,80 @@
+# Defaults for a single manual `helm install`. In the platform every value that
+# differs per stage — cloud, environment, tenant, ingress.host and the secret's
+# remote key — is set by the "hello" ApplicationSets in the OneK8s-argocd
+# repository, which render one Application per stage: staging on Azure,
+# production on AWS.
+#
+# Nothing in this chart branches on the cloud it lands on. "cloud" below is a
+# string the page prints and a label on the objects; the one value that really
+# does differ between clouds, secret.remoteKey, arrives ready-made from the
+# platform. That is the point of the whole exercise: the same chart, unchanged,
+# on AKS and on EKS.
+
+# Which cluster this release landed on. Shown on the page and used as a label.
+cloud: unknown
+
+# The environment the foundations were deployed for. Shown on the page.
+environment: prototype
+
+# The tenant whose namespace this is released into. Its namespaced SecretStore
+# ("tenant-store") is what the ExternalSecret authenticates through, so a
+# release in another tenant's namespace can only ever read that tenant's
+# secrets.
+tenant: team-alpha
+
+# Empty falls back to the app's own default ("Welcome to OneK8s!").
+welcomeMessage: ""
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/olljanat-ai/onek8s-hello/hello
+  # "latest" is the moving tag the Build Hello App workflow pushes on every
+  # merge to main. Pin an immutable "sha-<short>" tag for a reproducible
+  # deploy — see docs/hello-app.md.
+  tag: latest
+  pullPolicy: Always
+
+service:
+  port: 80
+
+# Always rendered: the app exists to be looked at, so a release without a way
+# in is not a case worth supporting.
+ingress:
+  # Required. One label deep, because that is what the *.onek8s.lol wildcard
+  # covers. The ApplicationSet sets "<cloud>-hello.onek8s.lol" — the cloud is
+  # the stage's: "azure-hello" is staging, "aws-hello" is production.
+  host: ""
+  # Empty leaves the class to the cluster default, which every foundation sets
+  # to Traefik. No TLS section and no certificate: Traefik's default TLSStore
+  # serves the platform wildcard.
+  className: ""
+
+# Always rendered too, for the same reason: showing the secret is what the app
+# is for.
+secret:
+  # The secret's short name. It is the label on the page, the key inside the
+  # generated Kubernetes Secret, and therefore the file the app reads.
+  name: test
+  # Required: the key to ask the backend for. Whoever deploys this knows the
+  # naming their tenant identity is allowed to read — the chart does not, and
+  # deliberately makes no attempt to guess it from "cloud".
+  remoteKey: ""
+  # The namespaced SecretStore modules/tenant-namespace creates per tenant.
+  storeName: tenant-store
+  # ESO re-reads the backend this often; the kubelet then refreshes the mounted
+  # file in place, so a rotated value reaches the page without a restart.
+  refreshInterval: 1h
+
+resources:
+  requests:
+    cpu: 1m
+    memory: 5Mi
+  limits:
+    cpu: 100m
+    memory: 100Mi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

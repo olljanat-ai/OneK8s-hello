@@ -1,0 +1,127 @@
+{{- if not .Values.sql.server }}
+{{- fail "sql.server is required: the Azure SQL host this application connects to (the ApplicationSet takes it from the Azure foundation's sql_server_fqdn output)" }}
+{{- end }}
+{{- if not .Values.sql.database }}
+{{- fail "sql.database is required: the database on that server (the Azure foundation's sql_database_name output)" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "db-hello.name" . }}
+  labels:
+    {{- include "db-hello.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "db-hello.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "db-hello.labels" . | nindent 8 }}
+        # The one label that makes the whole thing work. It tells the AKS
+        # workload identity webhook to mutate this pod: project a
+        # ServiceAccount token with the api://AzureADTokenExchange audience
+        # into it, and set AZURE_CLIENT_ID, AZURE_TENANT_ID,
+        # AZURE_AUTHORITY_HOST and AZURE_FEDERATED_TOKEN_FILE from the
+        # ServiceAccount's annotations. Without it the pod starts fine and the
+        # page says "no token", which is the failure this label prevents.
+        azure.workload.identity/use: "true"
+    spec:
+      # The tenant's ServiceAccount, not "default": it carries the
+      # azure.workload.identity/client-id annotation that names this tenant's
+      # user-assigned managed identity, and the federated credential on that
+      # identity names this namespace and this ServiceAccount. Deploying this
+      # chart into another tenant's namespace therefore gets that tenant's
+      # identity, and that tenant's database user — or none.
+      serviceAccountName: {{ .Values.serviceAccountName | quote }}
+      # The app talks to Entra ID and Azure SQL, never to the Kubernetes API.
+      # The projected *Azure* token the webhook adds is a separate volume and
+      # is unaffected by this.
+      automountServiceAccountToken: false
+      securityContext:
+        # Non-root twice over, exactly as in apps/hello: runAsNonRoot is the
+        # check the kubelet enforces, runAsUser/runAsGroup are the statement.
+        # 1654 is "app" in the .NET chiseled base image, which is what the
+        # Dockerfile's USER selects.
+        runAsNonRoot: true
+        runAsUser: 1654
+        runAsGroup: 1654
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: db-hello
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: WELCOME_MESSAGE
+              value: {{ .Values.welcomeMessage | quote }}
+            - name: CLOUD
+              value: {{ .Values.cloud | quote }}
+            - name: ENVIRONMENT
+              value: {{ .Values.environment | quote }}
+            # Not a secret, and deliberately plain environment variables: a
+            # host name and a database name authorize nobody. Everything that
+            # does authorize is the pod's identity, which is not written down
+            # anywhere in this manifest.
+            - name: SQL_SERVER
+              value: {{ .Values.sql.server | quote }}
+            - name: SQL_DATABASE
+              value: {{ .Values.sql.database | quote }}
+            - name: SQL_CONNECT_TIMEOUT_SECONDS
+              value: {{ .Values.sql.connectTimeoutSeconds | quote }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            # The root filesystem is read-only, and the .NET runtime still
+            # wants somewhere to put its diagnostics socket.
+            - name: tmp
+              mountPath: /tmp
+          # /healthz answers without touching the database on purpose: an
+          # auto-paused database must not restart the pod or take it out of
+          # the Service. A page view is what wakes the database up.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

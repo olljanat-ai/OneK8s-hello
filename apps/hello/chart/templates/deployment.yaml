@@ -1,0 +1,121 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hello.name" . }}
+  labels:
+    {{- include "hello.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "hello.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "hello.labels" . | nindent 8 }}
+    spec:
+      # The app talks to nothing but its own filesystem: no API access, so no
+      # token to steal out of it.
+      automountServiceAccountToken: false
+      securityContext:
+        # Non-root twice over, on purpose. runAsNonRoot is the check — the
+        # kubelet refuses to start the pod if the image resolves to UID 0 —
+        # and runAsUser/runAsGroup are the statement: this is who it runs as,
+        # readable here rather than only discoverable by inspecting the image.
+        #
+        # 1654 is "app" in the .NET chiseled base image (APP_UID, and its
+        # /etc/passwd entry "app:x:1654:1654"), which is what the Dockerfile's
+        # USER selects. The two have to agree; if the base image ever moves,
+        # runAsNonRoot fails the pod closed rather than quietly running as
+        # somebody else.
+        runAsNonRoot: true
+        runAsUser: 1654
+        runAsGroup: 1654
+        # No fsGroup: nothing here needs group ownership fixed up. The secret
+        # volume is read-only and world-readable, /tmp is an emptyDir the
+        # kubelet creates world-writable, and fsGroup would only add a
+        # recursive chown at every mount.
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hello
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: WELCOME_MESSAGE
+              value: {{ .Values.welcomeMessage | quote }}
+            - name: CLOUD
+              value: {{ .Values.cloud | quote }}
+            - name: ENVIRONMENT
+              value: {{ .Values.environment | quote }}
+            - name: TEST_SECRET_NAME
+              value: {{ .Values.secret.name | quote }}
+            # A path, not the value: the volume below is refreshed in place by
+            # the kubelet, so a secret that syncs (or rotates) after the pod
+            # started is picked up without a restart. An env var taken from
+            # secretKeyRef would be frozen at exec time.
+            - name: TEST_SECRET_FILE
+              value: /etc/onek8s/secret/{{ .Values.secret.name }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            # The root filesystem is read-only, and the .NET runtime still
+            # wants somewhere to put its diagnostics socket.
+            - name: tmp
+              mountPath: /tmp
+            - name: test-secret
+              mountPath: /etc/onek8s/secret
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: test-secret
+          secret:
+            secretName: {{ include "hello.secretName" . }}
+            # Optional, so the pod starts and renders "not available" while
+            # External Secrets is still working — or when the secret simply
+            # has not been created in this cloud's backend yet. Without it the
+            # pod would sit in ContainerCreating with nothing to show for it.
+            optional: true
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

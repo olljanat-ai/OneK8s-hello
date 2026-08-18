@@ -1,0 +1,31 @@
+{{- if not .Values.ingress.host }}
+{{- fail "ingress.host is required (the ApplicationSet sets it to \"<cloud>-hello.onek8s.lol\")" }}
+{{- end }}
+# The platform's tenant-facing contract in full: a host, a backend, and nothing
+# else. No TLS block and no certificate — Traefik's default TLSStore serves the
+# *.onek8s.lol wildcard that External Secrets keeps in the ingress namespace on
+# every cloud. The class is left unset so the cluster default (Traefik) applies.
+#
+# The A record for the host is created out of band, like every other host on
+# this platform: no cluster writes the onek8s.lol zone.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "hello.name" . }}
+  labels:
+    {{- include "hello.labels" . | nindent 4 }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "hello.name" . }}
+                port:
+                  number: {{ .Values.service.port }}

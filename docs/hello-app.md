@@ -110,8 +110,10 @@ put on the spokes — with it.
 
 ## The two stages
 
-`argocd/templates/applicationset-hello.yaml` in OneK8s-argocd ranges over
-`apps.hello.stages` and produces one ApplicationSet per stage. How each stage
+`argocd/templates/applicationsets.yaml` in OneK8s-argocd ranges over every
+application's stages and produces one ApplicationSet per application-stage.
+Nothing in that template names `hello` — this application is an entry under
+`apps:` in the chart's values, which is the whole of what onboarding one costs. How each stage
 finds its cluster follows from the topology rather than from the stage:
 
 - **staging** names its cluster (`in-cluster`) in a one-element `list`
@@ -181,12 +183,18 @@ consequences, and they are the reasons for changing this at all:
   `git log stages/hello/production.yaml` in OneK8s-argocd names every build
   production has ever run and who asked for it.
 
-Who may promote is a Kargo `Role` in the Project's namespace, rendered from
-`kargo.promoters` in the delivery-plane chart's values — a list of Entra ID
-group object IDs — and scoped to `promote` on exactly the stages that wait for a
-person. PR validation in OneK8s-argocd renders the chart and fails if the
-promotion policy, the Freight sources or the Kargo authorization on an
-Application ever disagree with `apps.hello.stages`.
+Who may promote is a Kargo `Role` in this application's own Project namespace
+(`onek8s-hello`), rendered from `apps.hello.promoters` in the delivery-plane
+chart's values — a list of Entra ID group object IDs — and scoped to `promote`
+on exactly the stages that wait for a person. One Kargo Project per application
+is what keeps that list, and the stage names, from being shared with everything
+else the platform runs.
+
+The steps a promotion runs are *not* per application: every Stage delegates to
+one cluster-scoped `ClusterPromotionTask`. PR validation in OneK8s-argocd
+renders the chart and fails if the promotion policy, the Freight sources or the
+Kargo authorization on an Application ever disagree with `apps.<name>.stages` —
+for every application, not just this one.
 
 ### The AppProject
 
@@ -236,9 +244,10 @@ quietly: the read is refused and the ExternalSecret goes `SecretSyncedError`.
 The prefix is spelled differently on AWS — and that difference is **not in the
 chart**. `apps/hello/chart` branches on nothing: it takes `secret.remoteKey` as
 a plain required value and asks the backend for exactly that. The ApplicationSet
-resolves it per stage (`argocd/templates/applicationset-hello.yaml` in
-OneK8s-argocd), which is the right place for it, because which cloud a cluster
-is happens to be the platform's business and never the application's:
+resolves it per stage — `apps.hello.parameters` in the delivery-plane chart's
+values, rendered with the stage's cloud in scope — which is the right place for
+it, because which cloud a cluster is happens to be the platform's business and
+never the application's:
 
 ```yaml
 # rendered per stage, because the stage fixes the cloud
@@ -350,7 +359,9 @@ without a pod restart.
 `.github/workflows/build-hello.yml` builds `apps/hello` on every push to `main`
 that touches it and pushes to **GHCR** as
 `ghcr.io/olljanat-ai/onek8s-hello/hello`, tagged `sha-<short>` — one immutable
-tag per build and **no moving tag at all**. Pull requests build without pushing.
+tag per build and **no moving tag at all**. (A `v*` git tag additionally
+publishes the semver tag, for an application that has releases; `hello` does not
+and its Warehouse selects by build time.) Pull requests build without pushing.
 The build is the whole of what CI does to a release: Kargo turns the new tag
 into Freight, promotes it to staging, and production waits for a person.
 

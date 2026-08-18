@@ -9,11 +9,24 @@ name: Build Hello App
 # So this workflow publishes an image and nothing more; what happens to it is
 # the delivery plane's business (see docs/hello-app.md).
 #
-# One immutable tag per build and no moving tag at all. That is a deliberate
-# constraint rather than an omission: Kargo identifies a release by its tag, and
-# a tag that can point at a different image tomorrow would make "production runs
-# sha-a1b2c3d" a statement with no content — and would let a pod that restarted
-# for its own reasons pull a build nobody promoted.
+# Every tag this publishes is immutable, and no moving tag is published at all.
+# That is a deliberate constraint rather than an omission: Kargo identifies a
+# release by its tag, and a tag that can point at a different image tomorrow
+# would make "production runs sha-a1b2c3d" a statement with no content — and
+# would let a pod that restarted for its own reasons pull a build nobody
+# promoted.
+#
+# Two kinds of tag, for the two things a platform's applications do:
+#
+#   sha-<short>   every merge to main. Content-addressed, no order of its own,
+#                 so the Warehouse picks the newest by build time.
+#   <semver>      a "v*" git tag. Ordered and readable, so a Warehouse can
+#                 select by version and constrain what a stage may take
+#                 ("^1.0.0" in production, pre-releases allowed in staging).
+#
+# hello has no releases and uses the first; the second is here so that an
+# application which does have them is a values change in OneK8s-argocd
+# (apps.<name>.release.image.selectionStrategy) rather than a workflow change.
 #
 # Pull requests build but do not push, so a change to the app is compiled and
 # containerised before it is merged without publishing anything.
@@ -23,6 +36,9 @@ on:
     paths:
       - "apps/hello/**"
       - ".github/workflows/build-hello.yml"
+    # A release tag builds whatever it points at, regardless of paths: the tag
+    # is the statement that this commit is a version.
+    tags: ["v*"]
   pull_request:
     paths:
       - "apps/hello/**"
@@ -57,11 +73,12 @@ jobs:
       # metadata-action lowercases the image name, which matters here: the
       # repository is "OneK8s-hello" and GHCR only accepts lowercase paths.
       #
-      # One tag, "sha-<short>", matching the pattern the Warehouse in
-      # OneK8s-argocd allows (apps.hello.image.tagRegex). Adding a moving tag
-      # here would not break the promotion — Kargo would ignore it — but it
-      # would put a second, ungated way to change what a cluster runs back in
-      # the registry.
+      # "sha-<short>" on every merge, matching the pattern the Warehouse in
+      # OneK8s-argocd allows (apps.hello.release.image.tagRegexes), plus the
+      # semver forms on a "v*" tag. Adding a *moving* tag here would not break
+      # the promotion — Kargo would ignore it — but it would put a second,
+      # ungated way to change what a cluster runs back in the registry, which is
+      # why "latest" is absent and the major/minor aliases are too.
       - name: Image tags
         id: meta
         uses: docker/metadata-action@v5
@@ -69,6 +86,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}/hello
           tags: |
             type=sha,format=short,prefix=sha-
+            type=semver,pattern={{version}}
 
       # linux/amd64 only: every foundation's node pool is x86 today
       # (VM.Standard.E2.1, t3.small, e2-medium, the AKS default).
@@ -94,6 +112,10 @@ jobs:
             echo '```'
             if [ "${{ github.event_name }}" = "pull_request" ]; then
               echo "_Built only — pull requests do not push._"
+            elif [ "${{ startsWith(github.ref, 'refs/tags/v') }}" = "true" ]; then
+              echo "Release build. Kargo picks it up only if this application's"
+              echo "Warehouse selects by version — see \`release.image.selectionStrategy\`"
+              echo "in [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd)."
             else
               echo "Kargo turns this into Freight and promotes it to **staging** (Azure)."
               echo "**Production** (AWS) waits for a person to promote it, and can only"

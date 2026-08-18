@@ -1,0 +1,83 @@
+# Defaults for a single manual `helm install`. In the platform every value that
+# is environment-specific — environment, tenant, ingress.host and both halves
+# of sql — is set by the "db-hello" ApplicationSet in the OneK8s-argocd
+# repository, which takes the database's coordinates from the Azure
+# foundation's outputs.
+#
+# Unlike apps/hello, this chart is Azure-only, and honestly so: its database is
+# an Azure resource and its identity is an Entra one. It is what the platform
+# looks like when an application uses a *cloud service* rather than only the
+# cluster — the parts that stayed cloud-agnostic (ingress, TLS, the namespace,
+# the ServiceAccount) are unchanged, and the part that cannot be is one host
+# name.
+
+# Which cluster this release landed on. Shown on the page and used as a label.
+cloud: azure
+
+# The environment the foundations were deployed for. Shown on the page.
+environment: prototype
+
+# The tenant whose namespace this is released into. Its ServiceAccount is the
+# whole authentication story: annotated with the tenant's user-assigned managed
+# identity by modules/tenant-namespace/azure, federated to exactly this
+# namespace and this ServiceAccount, and given a user in the database by the
+# tenants stack's own deploy.
+tenant: team-alpha
+
+# ServiceAccount the pod runs as. This is NOT cosmetic here: it is the identity
+# that authenticates to Azure SQL. modules/tenant-namespace creates it.
+serviceAccountName: workload
+
+# Empty falls back to the app's own default ("Welcome to OneK8s!").
+welcomeMessage: ""
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/olljanat-ai/onek8s-hello/db-hello
+  # "latest" is the moving tag the Build DB Hello App workflow pushes on every
+  # merge to main. Pin an immutable "sha-<short>" tag for a reproducible
+  # deploy — see docs/db-hello-app.md.
+  tag: latest
+  pullPolicy: Always
+
+service:
+  port: 80
+
+# Always rendered: the app exists to be looked at, so a release without a way
+# in is not a case worth supporting.
+ingress:
+  # Required. One label deep, because that is what the *.onek8s.lol wildcard
+  # covers. The ApplicationSet sets "azure-db-hello.onek8s.lol".
+  host: ""
+  # Empty leaves the class to the cluster default, which every foundation sets
+  # to Traefik. No TLS section and no certificate: Traefik's default TLSStore
+  # serves the platform wildcard.
+  className: ""
+
+# The database. Both values are required and neither is a secret: a host name
+# and a database name are public, and possession of them grants nothing.
+# Authorization is the tenant identity's database user, which lives in the
+# database and nowhere else.
+sql:
+  # Required. "<server>.database.windows.net", from the Azure foundation's
+  # sql_server_fqdn output.
+  server: ""
+  # Required. The foundation's sql_database_name output.
+  database: ""
+  # A paused serverless database can take the best part of a minute to wake up,
+  # and the first connection is the one that waits for it.
+  connectTimeoutSeconds: 30
+
+resources:
+  requests:
+    cpu: 5m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

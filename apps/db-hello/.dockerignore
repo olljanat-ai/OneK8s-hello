@@ -1,0 +1,5 @@
+# Build output must come from the SDK stage, never from a developer's machine.
+**/bin/
+**/obj/
+chart/
+README.md

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- One culture only: the page renders ASCII and nothing formats dates or
+         numbers, so the ICU payload is pure image weight. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- The chiseled runtime image starts the app as "dotnet hello.dll". -->
+    <AssemblyName>hello</AssemblyName>
+    <RootNamespace>OneK8s.Hello</RootNamespace>
+  </PropertyGroup>
+
+</Project>

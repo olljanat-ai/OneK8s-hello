@@ -1,0 +1,146 @@
+name: PR Validation
+
+# The applications are Helm and .NET, not Terraform: apps/*/chart is what Argo
+# CD renders on every stage's cluster, and apps/db-hello's migrations are what
+# the platform's Deploy Tenants workflow applies to the database. Both are
+# checked here for the same reason — a template error or a model that has run
+# ahead of its migrations would otherwise only surface after the merge, in a
+# failed sync or a deployment that quietly does nothing.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  charts:
+    name: helm (lint + render)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+
+      # secret.remoteKey is required and has no default — the chart refuses to
+      # guess a key from the cloud — so the renders have to stand in for what
+      # the ApplicationSet resolves per stage: a path on Secrets Manager for
+      # production on AWS, a flat name for staging on Azure. Both spellings get
+      # exercised below.
+      - name: The hello app, as rendered on each stage
+        run: |
+          helm lint apps/hello/chart \
+            --set ingress.host=azure-hello.onek8s.lol \
+            --set secret.remoteKey=team-alpha-test
+
+          render() {  # <stage> <cloud> <remote key>
+            helm template "hello-$1" apps/hello/chart \
+              --set cloud="$2" \
+              --set ingress.host="$2-hello.onek8s.lol" \
+              --set secret.remoteKey="$3" > /dev/null
+          }
+          render staging    azure team-alpha-test
+          render production aws   prototype/team-alpha/test
+
+      # db-hello is Azure-only, so there is one render rather than two — and
+      # both halves of sql are required, which is what these --set values are
+      # standing in for.
+      - name: The Azure SQL application
+        run: |
+          db_hello=(
+            --set ingress.host=azure-db-hello.onek8s.lol
+            --set sql.server=sql-onek8s-prototype-ab12.database.windows.net
+            --set sql.database=appdb
+          )
+          helm lint apps/db-hello/chart "${db_hello[@]}"
+          helm template db-hello-azure apps/db-hello/chart "${db_hello[@]}" > /dev/null
+
+      # Tenant namespaces enforce the "restricted" Pod Security Standard (the
+      # OneK8s repository's modules/tenant-namespace), whose central demand is
+      # that a workload names a non-root user. A chart that stopped satisfying
+      # it would be refused by the API server at sync time — after the merge, on
+      # every cluster it is deployed to — so the fields the standard checks are
+      # asserted here first. Against the rendered output rather than the
+      # templates, so that a value or a conditional cannot quietly drop one.
+      - name: Applications, non-root as the namespaces require
+        run: |
+          status=0
+          required=(
+            "runAsNonRoot: true"
+            "allowPrivilegeEscalation: false"
+            "type: RuntimeDefault"
+            "drop: [ALL]"
+          )
+
+          # <app> plus whatever that chart needs to render at all.
+          check() {
+            app="$1"
+            shift
+            rendered=$(helm template "$app" "apps/$app/chart" "$@")
+            for field in "${required[@]}"; do
+              if ! printf '%s' "$rendered" | grep -qF "$field"; then
+                echo "::error file=apps/$app/chart/templates/deployment.yaml::Rendered chart no longer sets \"$field\": the tenant namespace's restricted Pod Security Standard would reject the pod."
+                status=1
+              fi
+            done
+            # The chart says who the pod runs as; the image has to agree, and
+            # without a USER instruction it is root whatever the chart claims.
+            if ! grep -qE '^USER ' "apps/$app/Dockerfile"; then
+              echo "::error file=apps/$app/Dockerfile::No USER instruction: the image would run as root and runAsNonRoot would fail the pod."
+              status=1
+            fi
+          }
+
+          check hello \
+            --set ingress.host=hello.onek8s.lol \
+            --set secret.remoteKey=team-alpha-test
+
+          check db-hello \
+            --set ingress.host=azure-db-hello.onek8s.lol \
+            --set sql.server=sql-onek8s-prototype-ab12.database.windows.net \
+            --set sql.database=appdb
+
+          exit $status
+
+  # db-hello's schema is code-first: the EF Core model in apps/db-hello/src is
+  # the only description of the tables, and the platform's Deploy Tenants
+  # workflow applies the migrations generated from it. That only holds if the
+  # two agree, so a model change without `dotnet ef migrations add` fails here
+  # rather than in a deployment that quietly does nothing.
+  migrations:
+    name: ef migrations (db-hello)
+    runs-on: ubuntu-latest
+    env:
+      # Must match the EF Core packages in apps/db-hello/src/DbHello.csproj.
+      EF_VERSION: "10.0.11"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # No database is contacted: the check builds the model and compares it
+      # with the snapshot the migrations carry.
+      - name: The model and the migrations must agree
+        run: |
+          dotnet tool install dotnet-ef --version "$EF_VERSION" --tool-path .ef-tools
+          # dotnet-ef builds the project to read the model, and does not
+          # restore first: without this the build stops at NETSDK1004 (no
+          # project.assets.json) and the check never runs.
+          dotnet restore apps/db-hello/src
+          ./.ef-tools/dotnet-ef migrations has-pending-model-changes \
+            --project apps/db-hello/src --no-color
+
+  # The bootstrap is the one script that reaches across into the platform
+  # repository, so a syntax error in it is caught here rather than in the middle
+  # of a tenant deploy.
+  scripts:
+    name: shellcheck (bootstrap)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck apps/db-hello/bootstrap.sh

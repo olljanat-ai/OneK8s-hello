@@ -1,0 +1,18 @@
+apiVersion: v2
+name: hello
+description: >-
+  Minimal .NET web application that shows a welcome message and the value of a
+  test secret, read out of the host cloud's secret backend by External Secrets
+  through the tenant's namespaced SecretStore.
+type: application
+
+# The chart's own version. Bump it when the templates change; the image tag is
+# values.image.tag and moves independently.
+version: 0.3.0
+
+# Informational only — the deployed tag comes from values.image.tag.
+appVersion: "0.1.0"
+
+keywords:
+  - onek8s
+  - example

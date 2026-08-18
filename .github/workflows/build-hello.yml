@@ -1,14 +1,19 @@
 name: Build Hello App
 
 # Builds the example .NET application's container image and publishes it to
-# GHCR. From here Argo CD takes over, and the two stages part company:
+# GHCR. From here Kargo takes over, and the two stages part company:
 #
-#   staging     Azure/AKS   synced automatically — a merge to main is a deploy
-#   production  AWS/EKS     waits for a human ("Promote to production" in the
-#                           OneK8s-argocd repository, or `argocd app sync`)
+#   staging     Azure/AKS   Kargo promotes the new build automatically
+#   production  AWS/EKS     waits for a person, and takes only what staging ran
 #
 # So this workflow publishes an image and nothing more; what happens to it is
 # the delivery plane's business (see docs/hello-app.md).
+#
+# One immutable tag per build and no moving tag at all. That is a deliberate
+# constraint rather than an omission: Kargo identifies a release by its tag, and
+# a tag that can point at a different image tomorrow would make "production runs
+# sha-a1b2c3d" a statement with no content — and would let a pod that restarted
+# for its own reasons pull a build nobody promoted.
 #
 # Pull requests build but do not push, so a change to the app is compiled and
 # containerised before it is merged without publishing anything.
@@ -51,13 +56,18 @@ jobs:
 
       # metadata-action lowercases the image name, which matters here: the
       # repository is "OneK8s-hello" and GHCR only accepts lowercase paths.
+      #
+      # One tag, "sha-<short>", matching the pattern the Warehouse in
+      # OneK8s-argocd allows (apps.hello.image.tagRegex). Adding a moving tag
+      # here would not break the promotion — Kargo would ignore it — but it
+      # would put a second, ungated way to change what a cluster runs back in
+      # the registry.
       - name: Image tags
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}/hello
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short,prefix=sha-
 
       # linux/amd64 only: every foundation's node pool is x86 today
@@ -85,8 +95,9 @@ jobs:
             if [ "${{ github.event_name }}" = "pull_request" ]; then
               echo "_Built only — pull requests do not push._"
             else
-              echo "Staging (Azure) picks this up on Argo CD's next sync."
-              echo "Production (AWS) waits for the \"Promote to production\" workflow"
-              echo "in [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd)."
+              echo "Kargo turns this into Freight and promotes it to **staging** (Azure)."
+              echo "**Production** (AWS) waits for a person to promote it, and can only"
+              echo "take what staging has already run — see"
+              echo "[the release path](https://github.com/olljanat-ai/OneK8s-argocd#the-release-path)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"

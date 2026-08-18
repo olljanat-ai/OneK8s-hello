@@ -2,7 +2,8 @@
 # differs per stage — cloud, environment, tenant, ingress.host and the secret's
 # remote key — is set by the "hello" ApplicationSets in the OneK8s-argocd
 # repository, which render one Application per stage: staging on Azure,
-# production on AWS.
+# production on AWS. The one value that differs per *release* rather than per
+# stage, image.tag, is written there by Kargo when a stage is promoted.
 #
 # Nothing in this chart branches on the cloud it lands on. "cloud" below is a
 # string the page prints and a label on the objects; the one value that really
@@ -29,11 +30,20 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/olljanat-ai/onek8s-hello/hello
-  # "latest" is the moving tag the Build Hello App workflow pushes on every
-  # merge to main. Pin an immutable "sha-<short>" tag for a reproducible
-  # deploy — see docs/hello-app.md.
-  tag: latest
-  pullPolicy: Always
+  # Required, and deliberately without a default. The build workflow publishes
+  # one immutable "sha-<short>" tag per merge and no moving tag at all, so
+  # there is nothing sensible to fall back to: a chart that guessed would
+  # deploy a build nobody chose.
+  #
+  # In the platform this is written by Kargo, into
+  # stages/hello/<stage>.yaml in the OneK8s-argocd repository, which the
+  # stage's Application reads as a values file. That is what a promotion *is*
+  # — see docs/hello-app.md.
+  tag: ""
+  # The tag names one build for ever, so there is nothing to re-check on a
+  # restart. "Always" would be a pull per pod start, and a way for a moving tag
+  # to change what is running without anybody deploying anything.
+  pullPolicy: IfNotPresent
 
 service:
   port: 80

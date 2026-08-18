@@ -5,16 +5,16 @@ a .NET 10 web page showing a welcome message and the value of a **test secret**
 read out of the host cloud's own secret backend. One image and one chart travel
 a release path of two stages, on two different clouds:
 
-| Stage | Cloud | Cluster | Sync | URL |
+| Stage | Cloud | Cluster | How a build gets there | URL |
 |---|---|---|---|---|
-| `staging` | `azure` | AKS — the Argo CD hub | automatic | https://azure-hello.onek8s.lol |
-| `production` | `aws` | EKS — a registered spoke | **manual promotion** | https://aws-hello.onek8s.lol |
+| `staging` | `azure` | AKS — the Argo CD hub | Kargo promotes it automatically | https://azure-hello.onek8s.lol |
+| `production` | `aws` | EKS — a registered spoke | **a person promotes it, from `staging`** | https://aws-hello.onek8s.lol |
 
 That is the point of running it on two clouds rather than four copies of the
 same thing: staging and production are not two configurations of one cluster,
 they are two clusters on two providers, and the same artefact has to satisfy
 both. A merge to `main` reaches Azure by itself; nothing reaches AWS until a
-human says so.
+person says so.
 
 The platform's other example, [db-hello](db-hello-app.md), is the deliberate
 opposite: one cloud, a real Azure SQL database, and no secret at all. This one
@@ -30,7 +30,20 @@ resolved by the ApplicationSet and passed in, so the chart itself contains no
 ```
    OneK8s-hello (this repository)        OneK8s-argocd            OneK8s
    ──────────────────────────────        ─────────────            ──────
-   apps/hello/src ──build──▶ ghcr.io/…/hello
+   apps/hello/src ──build──▶ ghcr.io/…/hello:sha-a1b2c3d ─┐
+   apps/hello/chart @ 9f4e2b1 ────────────────────────────┤ watched by
+                                                          ▼
+                                       Kargo Warehouse "hello"
+                                             │  Freight = tag + chart commit
+                                    ┌────────┴────────┐
+                          auto      ▼                 ▼   a person promotes,
+                              Stage staging      Stage production   only from staging
+                                    │                 │
+                                    └── commit ───────┘
+                                      stages/hello/<stage>.yaml
+                                             │
+                                       read back by
+                                             ▼
    apps/hello/chart  ◀──── syncs ──── argocd/  ◀── syncs ── Application
                                        ├── AppProject         platform-gitops
                                        ├── AppSet hello-staging   (gitops/root-app.tf)
@@ -40,12 +53,15 @@ resolved by the ApplicationSet and passed in, so the chart itself contains no
                     ┌────────────────────────┴───────────────────┐
                     ▼                                            ▼
           hello-staging  (AKS, in-cluster)          hello-production  (EKS, spoke)
-          auto-synced                               manual: approval, then sync
+          auto-synced, to the promoted build        auto-synced, to the promoted build
                     │                                            │
                     ▼                                            ▼
                Key Vault                                  Secrets Manager
                   via External Secrets, per tenant identity
 ```
+
+Both Applications are auto-synced, and the gate is upstream of them: Argo CD
+makes each cluster match what Git says, and Git says what Kargo last promoted.
 
 ## Three repositories, and who owns what
 
@@ -54,8 +70,8 @@ The application is here; where and when it is deployed is not:
 | Repository | Owns |
 |---|---|
 | **OneK8s-hello** (this one) | `apps/hello` — the source, the Dockerfile, the chart, the image build |
-| [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) | The `AppProject` and the `hello-staging` / `hello-production` ApplicationSets: the stages, and the gate in front of production |
-| [OneK8s](https://github.com/olljanat-ai/OneK8s) | The clusters, the tenants, the Argo CD hub, and the one root `Application` that points Argo CD at the delivery plane |
+| [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) | The `AppProject`, the `hello-staging` / `hello-production` ApplicationSets, and the Kargo `Warehouse` and `Stage`s: the release path, and the gate in front of production |
+| [OneK8s](https://github.com/olljanat-ai/OneK8s) | The clusters, the tenants, the Argo CD hub, Kargo itself, and the one root `Application` that points them at the delivery plane |
 
 Exactly one Argo CD object is created by Terraform: the **root Application**,
 `gitops/root-app.tf` in OneK8s. It points Argo CD at `argocd/` in the
@@ -114,28 +130,63 @@ it from the cluster Secret.
 
 Per-stage values reach the chart as Helm parameters — `cloud`, `environment`,
 `tenant`, `ingress.host` (`<cloud>-hello.onek8s.lol`), `secret.name`,
-`secret.remoteKey` and the welcome message. Two of them are required and the
-chart fails to render without them: `ingress.host`, because an application
-nobody can open proves nothing, and `secret.remoteKey`, because guessing a key
-would mean guessing the cloud.
+`secret.remoteKey` and the welcome message. Those describe the *stage* and
+change only when the delivery plane does.
+
+What changes per *release* arrives differently, and that difference is the whole
+design: `image.tag` and the chart's own revision come from
+`stages/hello/<stage>.yaml`, a file Kargo writes and the ApplicationSet reads
+back — `chartRevision` as the chart source's `targetRevision`, `image.tag` as a
+Helm values file on that source. So the Application is a constant and the
+release is a line in Git.
+
+Three values are required and the chart fails to render without them:
+`ingress.host`, because an application nobody can open proves nothing;
+`secret.remoteKey`, because guessing a key would mean guessing the cloud; and
+`image.tag`, because no moving tag is published and a stage nobody has promoted
+to has nothing to deploy.
 
 ### The gate in front of AWS
 
-The staging Application carries `syncPolicy.automated` (prune + selfHeal); the
-production one deliberately carries none. Argo CD still tracks production — it
-turns `OutOfSync` the moment the chart or the image tag moves ahead — but it
-applies nothing to EKS until a human syncs it:
+Both Applications carry `syncPolicy.automated` (prune + selfHeal). The gate is
+not a withheld sync — it is that **no commit says production runs that build
+yet**.
+
+[Kargo](https://kargo.io) on the hub watches the image repository and the
+chart's directory, and freezes each new build together with the chart it is
+deployed with as a piece of immutable **Freight**. `staging` takes new Freight
+automatically. `production` takes Freight only from `staging`, and only when
+somebody promotes it:
 
 ```bash
-argocd app diff hello-production --grpc-web     # what would change
-argocd app sync hello-production --grpc-web     # open the gate
+kargo login https://kargo.onek8s.lol --sso
+kargo get freight --project onek8s-hello                    # what staging has run
+kargo promote --project onek8s-hello --stage production --freight <name>
+kargo get promotions --project onek8s-hello                 # who promoted what, when
 ```
 
-The recorded path is the **Promote to production** workflow in OneK8s-argocd:
-it prints the diff, then waits on a GitHub environment with required reviewers
-before syncing, so the approval and what was approved end up in one run log.
-The missing `automated` block is the guarantee; the workflow is the paperwork.
-PR validation there renders the chart and fails if the two ever disagree.
+A promotion clones OneK8s-argocd, writes the tag and the chart revision into
+`stages/hello/production.yaml`, commits, pushes, and asks Argo CD to sync. Four
+consequences, and they are the reasons for changing this at all:
+
+- **The gate cannot be lifted by editing the delivery plane.** Adding a sync
+  policy back changes nothing: the Application is already synced — to the
+  previous Freight.
+- **It covers the chart too.** A chart change is part of the Freight, so it
+  reaches production by promotion rather than the moment it merges.
+- **It cannot be jumped.** Production's Freight comes from staging, so a build
+  that has never run on AKS cannot be put on EKS even by somebody who is
+  allowed to promote.
+- **The record is where the change is.**
+  `git log stages/hello/production.yaml` in OneK8s-argocd names every build
+  production has ever run and who asked for it.
+
+Who may promote is a Kargo `Role` in the Project's namespace, rendered from
+`kargo.promoters` in the delivery-plane chart's values — a list of Entra ID
+group object IDs — and scoped to `promote` on exactly the stages that wait for a
+person. PR validation in OneK8s-argocd renders the chart and fails if the
+promotion policy, the Freight sources or the Kargo authorization on an
+Application ever disagree with `apps.hello.stages`.
 
 ### The AppProject
 
@@ -298,10 +349,19 @@ without a pod restart.
 
 `.github/workflows/build-hello.yml` builds `apps/hello` on every push to `main`
 that touches it and pushes to **GHCR** as
-`ghcr.io/olljanat-ai/onek8s-hello/hello`, tagged `latest` and `sha-<short>`.
-Pull requests build without pushing. The build is the whole of what CI does to
-a release: staging picks the image up on Argo CD's next sync, and production
-waits for the promotion. The package must be **public** for the clusters
+`ghcr.io/olljanat-ai/onek8s-hello/hello`, tagged `sha-<short>` — one immutable
+tag per build and **no moving tag at all**. Pull requests build without pushing.
+The build is the whole of what CI does to a release: Kargo turns the new tag
+into Freight, promotes it to staging, and production waits for a person.
+
+The missing `latest` is load-bearing. Kargo identifies a release by its tag, so
+a tag that can point at a different image tomorrow would make "production runs
+`sha-a1b2c3d`" a statement with no content — and, with `imagePullPolicy:
+Always`, would let a pod that restarted for its own reasons pull a build nobody
+promoted. `image.tag` in the chart therefore has no default either: it is
+required, and it is written per stage by a promotion.
+
+The package must be **public** for the clusters
 to pull it — none of them has a pull secret, which is deliberate: an image
 pull credential per cloud is exactly the kind of sprawl the platform avoids
 elsewhere. GHCR packages default to private, so make it public once, under the
@@ -341,14 +401,25 @@ than turning into an Argo CD sync error in four places at once.
 ## Operating it
 
 ```bash
+# The release path
+kargo get stages     --project onek8s-hello       # what each stage runs now
+kargo get freight    --project onek8s-hello       # what could be promoted
+kargo get promotions --project onek8s-hello       # who promoted what, when
+
+# The same without the CLI: they are ordinary objects on the hub
+kubectl -n onek8s-hello get warehouses,stages,freight
+kubectl -n onek8s-hello get promotions --sort-by=.metadata.creationTimestamp
+
+# What Git says production runs — the authoritative answer
+git -C ../OneK8s-argocd log --oneline -- stages/hello/production.yaml
+
 # The hub's view of the whole thing
 kubectl -n argocd get application platform-gitops
 kubectl -n argocd get applicationset hello-staging hello-production
 kubectl -n argocd get applications -L onek8s.io/stage,onek8s.io/cloud
 
 argocd app list --grpc-web
-argocd app get hello-production --grpc-web        # OutOfSync until promoted
-argocd app diff hello-production --grpc-web       # what a promotion would do
+argocd app get hello-production --grpc-web        # synced, to the promoted build
 
 # On any cluster: did the secret actually arrive?
 kubectl -n team-alpha get externalsecret hello
@@ -367,16 +438,12 @@ default TLSStore serves the `*.onek8s.lol` wildcard.
 
 ## Known gaps
 
-- **The image tag is `latest`, which blunts the promotion gate.** The build
-  workflow pushes an immutable `sha-<short>` tag alongside it, but nothing
-  writes that tag back into `apps/hello/chart/values.yaml`, so what Git says is
-  deployed is not by itself the whole truth. Argo CD sees no diff when only the
-  image moves, so a production pod that restarts for its own reasons pulls the
-  newest build without anyone approving it — `imagePullPolicy: Always` and a
-  moving tag, not the sync policy, are what let that happen. Pin `image.tag` to
-  a `sha-` tag (or set `apps.hello.stages.production.targetRevision` to a
-  release tag in OneK8s-argocd) to make a promotion the only way production
-  moves.
+- **Nothing verifies a stage beyond "the pods are healthy".** Kargo can hold
+  Freight behind a verification — an Argo Rollouts `AnalysisTemplate`, a smoke
+  test as a `Job` — before it becomes promotable, and this platform installs no
+  Argo Rollouts, so `production` accepts anything that ran in `staging` without
+  falling over. `soakTime` on the production stage is the blunt version of the
+  same idea and is available today.
 - **The test secret follows the certificate's schedule, not its own.** The
   Renew Certificate workflow generates it, so it rotates when the wildcard is
   renewed (roughly quarterly) and reaches the other clouds only on a
@@ -400,7 +467,14 @@ default TLSStore serves the `*.onek8s.lol` wildcard.
   the reason staging appears as a static list element rather than as a
   registered spoke — but it does mean the delivery plane and staging share a
   cluster, and production does not.
-- **Promotion syncs, it does not build.** Approving the promotion applies
-  whatever `main` says at that moment. With `targetRevision` left empty,
-  staging and production track the same branch, so a promotion always carries
-  everything merged since the last one.
+- **A promotion is a push to `main` of the delivery-plane repository.** Kargo
+  commits straight to the branch Argo CD syncs, so a promotion is not reviewed
+  the way a pull request is — the review is the approval to promote, and Kargo's
+  RBAC is what stands in for branch protection. The `git-open-pr` step is the
+  alternative if a promotion should be reviewed as a diff, at the cost of a
+  second click on every staging deploy.
+- **Kargo's Git credential can write to the whole delivery-plane repository.**
+  It is one Secret, scoped to one repository, and a promotion only ever touches
+  `stages/`, but nothing enforces that: a compromised credential could rewrite
+  the ApplicationSets too. A GitHub App restricted to the repository is the
+  better long-lived answer to how it is issued, not to what it may reach.

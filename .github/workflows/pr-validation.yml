@@ -25,25 +25,42 @@ jobs:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
 
-      # secret.remoteKey is required and has no default — the chart refuses to
-      # guess a key from the cloud — so the renders have to stand in for what
-      # the ApplicationSet resolves per stage: a path on Secrets Manager for
-      # production on AWS, a flat name for staging on Azure. Both spellings get
-      # exercised below.
+      # Three values are required and have no default, so every render below
+      # has to supply them the way the platform does:
+      #
+      #   secret.remoteKey  the chart refuses to guess a key from the cloud, so
+      #                     the ApplicationSet resolves it per stage — a path on
+      #                     Secrets Manager for production on AWS, a flat name
+      #                     for staging on Azure. Both spellings are exercised.
+      #   ingress.host      an application nobody can open proves nothing.
+      #   image.tag         no moving tag is published, so what a stage runs is
+      #                     whatever Kargo last promoted to it. A build tag is
+      #                     stood in for here.
       - name: The hello app, as rendered on each stage
         run: |
           helm lint apps/hello/chart \
+            --set image.tag=sha-0000000 \
             --set ingress.host=azure-hello.onek8s.lol \
             --set secret.remoteKey=team-alpha-test
 
           render() {  # <stage> <cloud> <remote key>
             helm template "hello-$1" apps/hello/chart \
               --set cloud="$2" \
+              --set image.tag=sha-0000000 \
               --set ingress.host="$2-hello.onek8s.lol" \
               --set secret.remoteKey="$3" > /dev/null
           }
           render staging    azure team-alpha-test
           render production aws   prototype/team-alpha/test
+
+          # The other half of the same promise: a chart that renders without a
+          # tag would deploy something nobody promoted.
+          if helm template hello apps/hello/chart \
+            --set ingress.host=azure-hello.onek8s.lol \
+            --set secret.remoteKey=team-alpha-test > /dev/null 2>&1; then
+            echo "::error file=apps/hello/chart/values.yaml::The chart rendered with no image.tag. It must fail: an unpromoted stage has no build to deploy."
+            exit 1
+          fi
 
       # db-hello is Azure-only, so there is one render rather than two — and
       # both halves of sql are required, which is what these --set values are
@@ -95,6 +112,7 @@ jobs:
           }
 
           check hello \
+            --set image.tag=sha-0000000 \
             --set ingress.host=hello.onek8s.lol \
             --set secret.remoteKey=team-alpha-test
 

@@ -17,8 +17,8 @@ docs/
 
 | Repository | Owns |
 |---|---|
-| [OneK8s](https://github.com/olljanat-ai/OneK8s) | The clusters and the platform: foundations, tenants, the Argo CD hub, and the root `Application` that bootstraps the delivery plane. |
-| [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) | Where and when an application is deployed: the `AppProject`, the `ApplicationSet`s, the stages, and the gate in front of production. |
+| [OneK8s](https://github.com/olljanat-ai/OneK8s) | The clusters and the platform: foundations, tenants, the Argo CD hub, Kargo, and the root `Application` that bootstraps the delivery plane. |
+| [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) | Where and when an application is deployed: the `AppProject`, the `ApplicationSet`s, and the Kargo `Warehouse` and `Stage`s that decide which build each cluster runs. |
 | **OneK8s-hello** (this one) | What is deployed. |
 
 ## The two applications
@@ -29,10 +29,10 @@ A page showing a welcome message and a **test secret** read out of the host
 cloud's own backend by External Secrets, through the tenant's namespaced
 `SecretStore`. It travels a release path of two stages:
 
-| Stage | Cloud | Cluster | Sync | URL |
+| Stage | Cloud | Cluster | How a build gets there | URL |
 |---|---|---|---|---|
-| `staging` | `azure` | AKS — the Argo CD hub | automatic, on every merge to `main` | https://azure-hello.onek8s.lol |
-| `production` | `aws` | EKS — a registered spoke | **manual promotion** | https://aws-hello.onek8s.lol |
+| `staging` | `azure` | AKS — the Argo CD hub | Kargo promotes every new build automatically | https://azure-hello.onek8s.lol |
+| `production` | `aws` | EKS — a registered spoke | **a person promotes it, and only from `staging`** | https://aws-hello.onek8s.lol |
 
 Staging and production are two clusters on two providers, so the same image and
 the same chart have to satisfy both. Exactly one string differs between them —
@@ -40,11 +40,12 @@ the key the secret is stored under, a path on Secrets Manager and a flat name in
 Key Vault — and the ApplicationSet resolves it and passes it in, so the chart
 contains no `if aws` of any kind.
 
-**Nothing reaches AWS without a human.** The production Application carries no
-`syncPolicy.automated`: Argo CD tracks it, shows it `OutOfSync` as soon as
-staging moves ahead, and applies nothing until it is synced — from the UI, with
-`argocd app sync hello-production`, or through the approval-gated *Promote to
-production* workflow in OneK8s-argocd. Full walkthrough:
+**Nothing reaches AWS without a person.** [Kargo](https://kargo.io) freezes
+each build together with the chart it is deployed with, promotes that to staging
+by itself, and then stops: production takes only what staging has already run,
+and only when somebody promotes it. Promoting writes the image tag and chart
+revision into the delivery-plane repository, so what each cluster runs is a line
+in Git and every release is a commit naming who asked for it. Full walkthrough:
 [docs/hello-app.md](docs/hello-app.md).
 
 ### `db-hello` — Azure only, and no credential at all
@@ -65,7 +66,10 @@ from `ONEK8S_ROOT` (default: `../OneK8s`).
 ## Images
 
 Both applications publish to **GHCR** on every merge to `main` that touches
-them, tagged `latest` and `sha-<short>`:
+them. `hello` publishes exactly one immutable tag per build, `sha-<short>`, and
+no moving tag: Kargo identifies a release by its tag, so a tag that can point
+somewhere else tomorrow would make "production runs `sha-a1b2c3d`" a statement
+with no content.
 
 ```
 ghcr.io/olljanat-ai/onek8s-hello/hello
@@ -83,13 +87,14 @@ public once under its package settings.
 cd apps/hello/src
 TEST_SECRET="a local value" WELCOME_MESSAGE="Hello from my laptop" dotnet run
 
-# the charts, as the delivery plane renders them
+# the charts, as the delivery plane renders them. image.tag is required and has
+# no default: in the platform it is whatever Kargo last promoted to that stage.
 helm template hello-staging apps/hello/chart \
   --set cloud=azure --set ingress.host=azure-hello.onek8s.lol \
-  --set secret.remoteKey=team-alpha-test
+  --set secret.remoteKey=team-alpha-test --set image.tag=sha-0000000
 helm template hello-production apps/hello/chart \
   --set cloud=aws --set ingress.host=aws-hello.onek8s.lol \
-  --set secret.remoteKey=prototype/team-alpha/test
+  --set secret.remoteKey=prototype/team-alpha/test --set image.tag=sha-0000000
 ```
 
 PR validation renders both charts on both stages, checks that they still satisfy
@@ -97,5 +102,5 @@ the `restricted` Pod Security Standard the tenant namespaces enforce (non-root,
 no privilege escalation, all capabilities dropped, `RuntimeDefault` seccomp) and
 that db-hello's EF model and its migrations still agree.
 
-Merging to `main` builds the image; staging deploys itself; production waits for
-someone to approve it.
+Merging to `main` builds the image; Kargo turns it into Freight and promotes it
+to staging by itself; production waits for someone to promote it.

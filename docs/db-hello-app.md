@@ -366,9 +366,13 @@ TLSStore serves the platform wildcard.
   grant lives in that deploy's second job. That is the price of not giving
   Terraform a database connection, and it is visible rather than silent — the
   page says which step is missing.
-- **The image tag is `latest`**, exactly as for `hello`: the build workflow
-  pushes an immutable `sha-<short>` alongside it, but nothing writes that tag
-  back into `values.yaml`. Pin `image.tag` for a reproducible deploy.
+- **The image tag is `latest`.** The build workflow pushes an immutable
+  `sha-<short>` alongside it, but nothing writes that tag back into
+  `values.yaml`, so a pod that restarts pulls whatever `latest` points at.
+  `hello` no longer has this gap — Kargo writes an immutable tag into the
+  delivery-plane repository per stage — but db-hello has one cluster and so no
+  release path to promote along, and a Warehouse for a single stage would be
+  ceremony rather than a gate. Pin `image.tag` for a reproducible deploy.
 - **`AutoPause` costs the first visitor a wait.** Roughly a minute, once an
   hour of idleness. `sql_auto_pause_delay_in_minutes = -1` turns it off and
   spends the free allowance continuously instead — 100,000 vCore seconds is

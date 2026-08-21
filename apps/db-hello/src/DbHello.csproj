@@ -22,6 +22,7 @@
          token the workload identity webhook mounts; the interceptor in Data/
          attaches it to the connection EF Core opens. Between them they are the
          entire "no password" story. -->
+    <PackageReference Include="Azure.Core" Version="1.59.0" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.11" />
     <!-- Design-time only: what `dotnet ef migrations add` and

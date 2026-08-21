@@ -12,7 +12,8 @@ apps/
 └── db-hello/    # .NET 10 page reading and writing Azure SQL with no credential
 docs/
 ├── hello-app.md
-└── db-hello-app.md
+├── db-hello-app.md
+└── container-image-scanning.md
 ```
 
 | Repository | Owns |
@@ -79,6 +80,16 @@ ghcr.io/olljanat-ai/onek8s-hello/db-hello
 The packages must be **public** — no cluster on any cloud has a pull secret,
 which is deliberate — and GHCR packages default to private, so make each one
 public once under its package settings.
+
+Both are scanned by [Aikido](https://www.aikido.dev/code/container-image-scanning),
+in the build before the push and continuously on GHCR afterwards. The first
+stops a bad build from ever being published, so Kargo never has it to promote;
+the second is the only thing that catches a CVE published after the build
+finished, which is where a promoted image spends most of its life. Nothing has
+to be attached to the image for either to work — Aikido inventories the layers
+itself, so there is no SBOM to publish and the manifest a tag points at stays
+one manifest. Set-up, what the build keeps, and which labels matter:
+[docs/container-image-scanning.md](docs/container-image-scanning.md).
 
 ## Working on them
 

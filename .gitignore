@@ -55,3 +55,8 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# CycloneDX inventories the Aikido scan writes on its way past. Kept with the
+# workflow run as an artifact, never committed — see
+# docs/container-image-scanning.md.
+sbom/

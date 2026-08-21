@@ -28,6 +28,12 @@ name: Build Hello App
 # application which does have them is a values change in OneK8s-argocd
 # (apps.<name>.release.image.selectionStrategy) rather than a workflow change.
 #
+# The image is built into the runner's own Docker daemon, scanned, and only
+# then pushed — see the scan step for why that order and not the other one.
+# Aikido also watches GHCR directly, so this step is the early half of a
+# two-part arrangement rather than the only place images are looked at:
+# docs/container-image-scanning.md.
+#
 # Pull requests build but do not push, so a change to the app is compiled and
 # containerised before it is merged without publishing anything.
 on:
@@ -57,6 +63,25 @@ jobs:
   image:
     name: image (ghcr.io)
     runs-on: ubuntu-latest
+    env:
+      # Read at the job level rather than in the step, because a step's `if:`
+      # cannot see a secret directly. Empty means Aikido has not been set up
+      # for this repository, and the scan below is skipped rather than failed:
+      # a security integration that has to exist before anyone can build is a
+      # security integration nobody will finish setting up.
+      AIKIDO_API_KEY: ${{ secrets.AIKIDO_API_KEY }}
+      # Optional, both repository *variables* rather than secrets:
+      #
+      #   AIKIDO_TEAM     the Aikido team the image belongs to. This is the
+      #                   only ownership wiring Aikido reads — it does not look
+      #                   at image labels — so a container with no team is a
+      #                   finding with nobody to send it to.
+      #   AIKIDO_FAIL_ON  low|medium|high|critical. Unset means report only.
+      #                   Set it and the scan becomes a release gate: the push
+      #                   below never runs, so the build Kargo would have
+      #                   promoted is never published in the first place.
+      AIKIDO_TEAM: ${{ vars.AIKIDO_TEAM }}
+      AIKIDO_FAIL_ON: ${{ vars.AIKIDO_FAIL_ON }}
     steps:
       - uses: actions/checkout@v4
 
@@ -79,7 +104,7 @@ jobs:
       # the promotion — Kargo would ignore it — but it would put a second,
       # ungated way to change what a cluster runs back in the registry, which is
       # why "latest" is absent and the major/minor aliases are too.
-      - name: Image tags
+      - name: Image tags and labels
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -87,22 +112,123 @@ jobs:
           tags: |
             type=sha,format=short,prefix=sha-
             type=semver,pattern={{version}}
+          # metadata-action already emits the OCI set from the repository, and
+          # one of those labels does more than describe: image.source is what
+          # GitHub reads to attach the package to this repository. That link is
+          # what "Inherit access from source repository" hangs off — the
+          # setting Aikido needs to be able to read the package at all — and
+          # what lets a scanner get from a finding back to the Dockerfile that
+          # caused it. It is set for free; the point of this comment is that it
+          # is load-bearing, so nothing here should ever override it.
+          #
+          # What is overridden is title and description, whose defaults are the
+          # *repository's* name and description. This repository publishes two
+          # images, so both would arrive in GHCR — and in a scanner's container
+          # inventory — carrying the same name, told apart only by their path.
+          #
+          # No custom ownership label is set here, and that is not an omission
+          # either: Aikido tracks ownership as teams (AIKIDO_TEAM above), and
+          # the tenant a release lands in is a property of the *deployment*,
+          # not of the image. The chart is where onek8s.io/tenant belongs, and
+          # it is already there.
+          labels: |
+            org.opencontainers.image.title=hello
+            org.opencontainers.image.description=Welcome page showing a test secret read out of the host cloud's secret backend by External Secrets.
+            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}/blob/main/docs/hello-app.md
+            org.opencontainers.image.vendor=OneK8s
 
       # linux/amd64 only: every foundation's node pool is x86 today
       # (VM.Standard.E2.1, t3.small, e2-medium, the AKS default).
-      - name: Build and push
+      #
+      # Loaded into the runner's Docker daemon instead of pushed, so that the
+      # scan below has something to open. The push is a separate step for one
+      # reason: an unpublished image is one Kargo cannot promote, so a gating
+      # scan that runs here stops a bad build from existing, where the same
+      # scan run against the registry could only report on one that already
+      # does.
+      - name: Build
         uses: docker/build-push-action@v6
         with:
           context: apps/hello
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          load: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Aikido builds its own SBOM by unpacking the layers, so nothing has to
+      # be attached to the image for it to work — there is no attestation to
+      # publish and no manifest to keep. --output-cyclonedx-json asks for a
+      # copy of that inventory on the way past, which is kept with the run
+      # below; it is for us, not for Aikido.
+      #
+      # The image is scanned under its full GHCR name deliberately. Aikido also
+      # discovers these images by watching the registry, and a scan reported
+      # under any other name would arrive as a second container with the same
+      # contents and its own history.
+      - name: Aikido image scan
+        if: env.AIKIDO_API_KEY != '' && github.event_name != 'pull_request'
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          image=$(printf '%s\n' "$TAGS" | head -n1)
+          # The scanner runs as its own user inside the container; the output
+          # directory has to be writable by whoever that turns out to be.
+          mkdir -p sbom && chmod 777 sbom
+
+          scan=(image-scan "$image" --output-cyclonedx-json /out/hello.cdx.json)
+          if [ -n "$AIKIDO_TEAM" ]; then
+            scan+=(--linked-team-name "$AIKIDO_TEAM")
+          fi
+          if [ -n "$AIKIDO_FAIL_ON" ]; then
+            scan+=(--fail-on "$AIKIDO_FAIL_ON")
+          fi
+
+          # The key goes in as an environment variable rather than --apikey:
+          # arguments are visible to anything that can list processes on the
+          # runner, and end up in the scanner's own diagnostics.
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/sbom:/out" \
+            -e AIKIDO_API_KEY \
+            aikidosecurity/local-scanner "${scan[@]}"
+
+      # Kept with the run rather than pushed to the registry: the SBOM is
+      # evidence about one build, and the run is what it belongs to. Retention
+      # is the repository's Actions default (90 days unless changed), which is
+      # shorter than the images live — Aikido keeps its own copy per container,
+      # and can re-derive one from the registry at any time.
+      # always(), because the run this is evidence about is exactly the run
+      # where the gate fired: a build rejected for a critical CVE is the one
+      # whose inventory somebody is going to want to read.
+      - name: Keep the SBOM with the build
+        if: always() && env.AIKIDO_API_KEY != '' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-hello-${{ github.sha }}
+          path: sbom/*.json
+          if-no-files-found: warn
+
+      # Everything here comes back out of the layer cache the build above just
+      # filled, so this re-exports the bytes that were scanned rather than
+      # building them again. The labels are the same fixed strings, so the
+      # image config is identical too — what is pushed is what was looked at.
+      - name: Push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/hello
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          cache-from: type=gha
+
       - name: Summary
+        if: always()
         run: |
           {
             echo "### Hello image"
@@ -110,6 +236,13 @@ jobs:
             echo '```'
             echo "${{ steps.meta.outputs.tags }}"
             echo '```'
+            if [ -z "${AIKIDO_API_KEY}" ]; then
+              echo "_Not scanned: \`AIKIDO_API_KEY\` is not set — see [container image scanning](https://github.com/${{ github.repository }}/blob/main/docs/container-image-scanning.md)._"
+            elif [ -n "${AIKIDO_FAIL_ON}" ]; then
+              echo "Scanned by Aikido, gating on **${AIKIDO_FAIL_ON}** and above."
+            else
+              echo "Scanned by Aikido (report only — set the \`AIKIDO_FAIL_ON\` variable to gate)."
+            fi
             if [ "${{ github.event_name }}" = "pull_request" ]; then
               echo "_Built only — pull requests do not push._"
             elif [ "${{ startsWith(github.ref, 'refs/tags/v') }}" = "true" ]; then

@@ -51,6 +51,16 @@
           "Microsoft.EntityFrameworkCore.Relational": "10.0.11"
         }
       },
+      "System.IdentityModel.Tokens.Jwt": {
+        "type": "Direct",
+        "requested": "[7.7.2, )",
+        "resolved": "7.7.2",
+        "contentHash": "q1gEW8x1u2BZOr8gS9IGzF5Fva0IGGKYreHf0iJ7XxDHc+CF2wbpV2wRY2WTSUskVsew1zKgWiK88KuZi99xuQ==",
+        "dependencies": {
+          "Microsoft.IdentityModel.JsonWebTokens": "7.7.2",
+          "Microsoft.IdentityModel.Tokens": "7.7.2"
+        }
+      },
       "Humanizer.Core": {
         "type": "Transitive",
         "resolved": "2.14.1",
@@ -219,18 +229,18 @@
       },
       "Microsoft.IdentityModel.JsonWebTokens": {
         "type": "Transitive",
-        "resolved": "7.7.1",
-        "contentHash": "3Izi75UCUssvo8LPx3OVnEeZay58qaFicrtSnbtUt7q8qQi0gy46gh4V8VUTkMVMKXV6VMyjBVmeNNgeCUJuIw==",
+        "resolved": "7.7.2",
+        "contentHash": "nVdqEFKQSeJwO+nHG81+uPccXQiNGeZPCqd40tlJ3lLu84X1x27Wlb4IJfj5guth5ssKqAr12WpKv7ntfWFYfg==",
         "dependencies": {
-          "Microsoft.IdentityModel.Tokens": "7.7.1"
+          "Microsoft.IdentityModel.Tokens": "7.7.2"
         }
       },
       "Microsoft.IdentityModel.Logging": {
         "type": "Transitive",
-        "resolved": "7.7.1",
-        "contentHash": "BZNgSq/o8gsKExdYoBKPR65fdsxW0cTF8PsdqB8y011AGUJJW300S/ZIsEUD0+sOmGc003Gwv3FYbjrVjvsLNQ==",
+        "resolved": "7.7.2",
+        "contentHash": "S3ZGckxYPMGKbtuVpNKyMXuYJOK+gyeNcBn0fDH1E4Xrx3ORjL3S0ILclZwzmJfqxa/819nzEO2PrHpdPbfrFQ==",
         "dependencies": {
-          "Microsoft.IdentityModel.Abstractions": "7.7.1"
+          "Microsoft.IdentityModel.Abstractions": "7.7.2"
         }
       },
       "Microsoft.IdentityModel.Protocols": {
@@ -252,10 +262,10 @@
       },
       "Microsoft.IdentityModel.Tokens": {
         "type": "Transitive",
-        "resolved": "7.7.1",
-        "contentHash": "fQ0VVCba75lknUHGldi3iTKAYUQqbzp1Un8+d9cm9nON0Gs8NAkXddNg8iaUB0qi/ybtAmNWizTR4avdkCJ9pQ==",
+        "resolved": "7.7.2",
+        "contentHash": "fmA7KZpH/GXPNKtJCvwszjPOKg3pOwyRRlJfrHzHA91Xwqz2IAc6+PnK8gLbj8yrb+sbquCtAm/x+X7z1p7QUQ==",
         "dependencies": {
-          "Microsoft.IdentityModel.Logging": "7.7.1"
+          "Microsoft.IdentityModel.Logging": "7.7.2"
         }
       },
       "Microsoft.SqlServer.Server": {
@@ -348,15 +358,6 @@
         "contentHash": "vPinosRgEk1CGjohbv0pDuz6gPprkWo5xvBTjOJjks5JOgOEWvPndq5NngGxiTcBcy1+k9GwzZ1c3Bp2fU5ezw==",
         "dependencies": {
           "System.Security.Cryptography.ProtectedData": "9.0.11"
-        }
-      },
-      "System.IdentityModel.Tokens.Jwt": {
-        "type": "Transitive",
-        "resolved": "7.7.1",
-        "contentHash": "rQkO1YbAjLwnDJSMpRhRtrc6XwIcEOcUvoEcge+evurpzSZM3UNK+MZfD3sKyTlYsvknZ6eJjSBfnmXqwOsT9Q==",
-        "dependencies": {
-          "Microsoft.IdentityModel.JsonWebTokens": "7.7.1",
-          "Microsoft.IdentityModel.Tokens": "7.7.1"
         }
       },
       "System.Memory.Data": {

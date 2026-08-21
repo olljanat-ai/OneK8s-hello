@@ -12,4 +12,9 @@
     <RootNamespace>OneK8s.Hello</RootNamespace>
   </PropertyGroup>
 
+  <!-- Recommended by aikido.dev -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</RestoreLockedMode>
+  </PropertyGroup>
 </Project>

@@ -8,7 +8,7 @@ a release path of two stages, on two different clouds:
 | Stage | Cloud | Cluster | How a build gets there | URL |
 |---|---|---|---|---|
 | `staging` | `azure` | AKS — the Argo CD hub | Kargo promotes it automatically | https://azure-hello.onek8s.lol |
-| `production` | `aws` | EKS — a registered spoke | **a person promotes it, from `staging`** | https://aws-hello.onek8s.lol |
+| `production` | `aws` | EKS — a spoke, reached by its own agent | **a person promotes it, from `staging`** | https://aws-hello.onek8s.lol |
 
 That is the point of running it on two clouds rather than four copies of the
 same thing: staging and production are not two configurations of one cluster,
@@ -96,7 +96,7 @@ Those values are handed to the delivery-plane chart as Helm values rather than
 committed into it, which is what lets **one copy** of it serve prototype, dev,
 staging and prod: the platform environment decides which spokes the cluster
 generator selects, which revision is synced and which hosts the applications
-get. `platform_apps = { enabled = false }` registers spokes without deploying
+get. `platform_apps = { enabled = false }` attaches spokes without deploying
 anything, and the root Application is skipped automatically when the hub's
 foundation was applied with `enable_argocd = false`.
 
@@ -122,13 +122,18 @@ finds its cluster follows from the topology rather than from the stage:
   generator.
 - **production** names only its cloud, and a `clusters` generator selects the
   spoke labelled `onek8s.io/cloud: aws` for this environment — the label
-  `modules/argocd-spoke` puts on the cluster Secret. No AWS spoke registered in
+  `modules/argocd-spoke` puts on the cluster Secret. No AWS spoke attached in
   this environment, no production Application: the release path follows the
   gitops stack by itself.
 
-Applications address their cluster by `destination.name`, not by server URL:
-the EKS endpoint is whatever that service handed out, and Argo CD already knows
-it from the cluster Secret.
+Applications address their cluster by `destination.name`, not by server URL.
+That was always the stable choice — the EKS endpoint is whatever that service
+handed out — and it is now also how the Application is *routed*: a spoke is
+reached through an [argocd-agent](https://github.com/argoproj-labs/argocd-agent)
+agent that dials the hub, and the principal reads `destination.name` to decide
+which agent an Application belongs to. So `hello-production` is created on the
+hub, handed to the AWS cluster's agent, and applied by that cluster's own Argo
+CD. Nothing on the hub calls the EKS API server.
 
 Per-stage values reach the chart as Helm parameters — `cloud`, `environment`,
 `tenant`, `ingress.host` (`<cloud>-hello.onek8s.lol`), `secret.name`,
@@ -475,9 +480,11 @@ default TLSStore serves the `*.onek8s.lol` wildcard.
   scoped to that one namespace; a second tenant means a second destination.
 - **The hub deploys to itself.** `hello-staging` targets `in-cluster`, so the
   cluster running Argo CD also runs a workload. That is fine for a lab and is
-  the reason staging appears as a static list element rather than as a
-  registered spoke — but it does mean the delivery plane and staging share a
-  cluster, and production does not.
+  the reason staging appears as a static list element rather than as a spoke —
+  but it does mean the delivery plane and staging share a cluster, and
+  production does not. It is also why the hub keeps its own
+  application-controller under argocd-agent, and why the Applications for a
+  spoke carry a label the hub's own do not.
 - **A promotion is a push to `main` of the delivery-plane repository.** Kargo
   commits straight to the branch Argo CD syncs, so a promotion is not reviewed
   the way a pull request is — the review is the approval to promote, and Kargo's

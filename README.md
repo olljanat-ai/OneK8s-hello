@@ -32,7 +32,7 @@ cloud's own backend by External Secrets, through the tenant's namespaced
 | Stage | Cloud | Cluster | How a build gets there | URL |
 |---|---|---|---|---|
 | `staging` | `azure` | AKS — the Argo CD hub | Kargo promotes every new build automatically | https://azure-hello.onek8s.lol |
-| `production` | `aws` | EKS — a registered spoke | **a person promotes it, and only from `staging`** | https://aws-hello.onek8s.lol |
+| `production` | `aws` | EKS — a spoke, reached by its own agent | **a person promotes it, and only from `staging`** | https://aws-hello.onek8s.lol |
 
 Staging and production are two clusters on two providers, so the same image and
 the same chart have to satisfy both. Exactly one string differs between them —

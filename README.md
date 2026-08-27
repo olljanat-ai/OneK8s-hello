@@ -2,9 +2,11 @@
 
 **The example applications of the [OneK8s](https://github.com/olljanat-ai/OneK8s)
 platform** — their source, their Dockerfiles and their Helm charts. Nothing in
-here decides where or when they are deployed: that is the delivery plane's
-business, in
-[OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd).
+here decides where or when they are deployed: that is a delivery plane's
+business — and the platform now runs two of them,
+[OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) and
+[OneK8s-fluxcd](https://github.com/olljanat-ai/OneK8s-fluxcd), which deploy
+these charts unchanged to different tenants so the two can be compared.
 
 ```
 apps/
@@ -19,6 +21,7 @@ docs/
 |---|---|
 | [OneK8s](https://github.com/olljanat-ai/OneK8s) | The clusters and the platform: foundations, tenants, the Argo CD hub, Kargo, and the root `Application` that bootstraps the delivery plane. |
 | [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) | Where and when an application is deployed: the `AppProject`, the `ApplicationSet`s, and the Kargo `Warehouse` and `Stage`s that decide which build each cluster runs. |
+| [OneK8s-fluxcd](https://github.com/olljanat-ai/OneK8s-fluxcd) | The same, without a hub or a promotion engine: one directory per cluster, and the commit that says which build that cluster runs. |
 | **OneK8s-hello** (this one) | What is deployed. |
 
 ## The two applications

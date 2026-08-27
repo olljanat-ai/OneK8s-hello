@@ -63,15 +63,17 @@ resolved by the ApplicationSet and passed in, so the chart itself contains no
 Both Applications are auto-synced, and the gate is upstream of them: Argo CD
 makes each cluster match what Git says, and Git says what Kargo last promoted.
 
-## Three repositories, and who owns what
+## Four repositories, and who owns what
 
-The application is here; where and when it is deployed is not:
+The application is here; where and when it is deployed is not — and it is now
+answered twice, by two delivery planes that share nothing but this chart:
 
 | Repository | Owns |
 |---|---|
 | **OneK8s-hello** (this one) | `apps/hello` — the source, the Dockerfile, the chart, the image build |
 | [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) | The `AppProject`, the `hello-staging` / `hello-production` ApplicationSets, and the Kargo `Warehouse` and `Stage`s: the release path, and the gate in front of production |
-| [OneK8s](https://github.com/olljanat-ai/OneK8s) | The clusters, the tenants, the Argo CD hub, Kargo itself, and the one root `Application` that points them at the delivery plane |
+| [OneK8s-fluxcd](https://github.com/olljanat-ai/OneK8s-fluxcd) | The same question with no hub and no promotion engine: one directory per cluster, and the commit that says which build that cluster runs |
+| [OneK8s](https://github.com/olljanat-ai/OneK8s) | The clusters, the tenants, the Argo CD hub, Kargo itself, the per-cluster Flux, and the one root `Application` that points Argo CD at its delivery plane |
 
 Exactly one Argo CD object is created by Terraform: the **root Application**,
 `gitops/root-app.tf` in OneK8s. It points Argo CD at `argocd/` in the
@@ -107,6 +109,31 @@ put on the spokes — with it.
 > The platform *environment* (`prototype`, `dev`, …) and an application *stage*
 > (`staging`, `production`) are different axes. One platform environment holds
 > both the Azure staging cluster and the AWS production cluster of this app.
+
+## The same chart, delivered by Flux
+
+Everything above describes the Argo CD plane, which is the one this
+application's release path travels. AKS and EKS also run **Flux** — installed
+per cluster, with no hub and nothing registered between them — and it deploys
+*this same chart, unchanged* for a different tenant:
+
+| Cluster | Argo CD + Kargo — `team-alpha` | Flux — `team-beta` |
+|---|---|---|
+| AKS | https://azure-hello.onek8s.lol | https://azure-hello2.onek8s.lol |
+| EKS | https://aws-hello.onek8s.lol | https://aws-hello2.onek8s.lol |
+
+Nothing in this repository changed to make that work, which is the interesting
+part: the chart takes `cloud`, `environment`, `tenant`, `ingress.host` and
+`secret.remoteKey` from whoever deploys it, and has no opinion about who that
+is. On the Flux side those arrive as `${VARIABLE}` substitutions from a
+ConfigMap Terraform writes, where here they are Helm parameters rendered by an
+ApplicationSet.
+
+The difference is above the chart, and it is the whole reason both are
+installed: there is no `Warehouse` on that plane, so a build reaches a cluster
+when somebody edits `clusters/<cloud>/hello2-release.yaml` in OneK8s-fluxcd —
+review as the gate, rather than a promotion policy. See
+[fluxcd.md](https://github.com/olljanat-ai/OneK8s/blob/main/docs/fluxcd.md).
 
 ## The two stages
 
@@ -470,9 +497,12 @@ default TLSStore serves the `*.onek8s.lol` wildcard.
   wildcard covers, so a second environment cannot also publish
   `aws-hello.onek8s.lol`. A second environment needs its own `domain` in
   `platform_apps` (and a wildcard to match).
-- **One tenant.** The application is released into `team-alpha` on both stages
-  because that tenant exists everywhere in this environment. The AppProject is
-  scoped to that one namespace; a second tenant means a second destination.
+- **One tenant per delivery plane.** The release path above is released into
+  `team-alpha` on both stages because that tenant exists everywhere in this
+  environment, and the AppProject is scoped to that one namespace; a second
+  tenant on this plane means a second destination. (The Flux plane runs the
+  same chart in `team-beta`, which is a second *tenant* but not a second
+  stage — it has no release path at all.)
 - **The hub deploys to itself.** `hello-staging` targets `in-cluster`, so the
   cluster running Argo CD also runs a workload. That is fine for a lab and is
   the reason staging appears as a static list element rather than as a

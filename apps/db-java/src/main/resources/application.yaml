@@ -1,0 +1,56 @@
+# Everything that is not a connection setting. The connection itself is built
+# in code — see data/VisitsDataSource.java — because the token callback is an
+# object and the two values that vary come from the environment the chart sets.
+spring:
+  application:
+    name: db-java
+  jpa:
+    # db-hello owns the schema. This application maps the table it created and
+    # must never issue DDL: its identity holds db_datareader and db_datawriter,
+    # so the database would refuse it in any case — but "none" says so here as
+    # well, where somebody adding an entity will read it.
+    hibernate:
+      ddl-auto: none
+    # These two settings are one decision, and the decision is that the pod
+    # starts whether or not the database will talk to it.
+    #
+    # Hibernate works out what it is connected to by asking the driver for
+    # metadata, which means opening a connection while the context starts — and
+    # failing to create the EntityManagerFactory when it cannot. A paused
+    # serverless database, a tenant whose database user has not been created
+    # yet, or an unapplied migration would each turn into a pod in
+    # CrashLoopBackOff: exactly the states this application exists to *explain*,
+    # and it cannot explain anything if it does not come up. So metadata access
+    # is off — and then the dialect has to be named here, because there is
+    # nothing left to deduce it from. Remove either line and the other stops
+    # making sense: without the dialect the context fails to start at all
+    # ("Unable to determine Dialect without JDBC metadata"), and without the
+    # second line the first one is decoration.
+    #
+    # Hibernate logs HHH90000025 to say a named dialect is redundant for it.
+    # It is not redundant for the startup above. DbJavaApplicationTests
+    # asserts the property this pair buys.
+    database-platform: org.hibernate.dialect.SQLServerDialect
+    properties:
+      hibernate.boot.allow_jdbc_metadata_access: false
+    # The page renders from what Database.read() returned; nothing lazy is
+    # touched afterwards, and an open session per request would only hold a
+    # pooled connection while the HTML is written.
+    open-in-view: false
+
+server:
+  # The .NET default for a non-root container, and the same port the other two
+  # applications listen on: binding 80 needs a capability this user does not
+  # have. Named "http" in the Service.
+  port: 8080
+  # Nothing here serves an error page; a failed page view is a rendered page
+  # that says what failed.
+  error:
+    whitelabel:
+      enabled: false
+
+logging:
+  level:
+    # The pool logs every connection it opens at DEBUG; INFO is one line per
+    # pool. Hibernate's own SQL stays off — the page is the demonstration.
+    com.zaxxer.hikari: info

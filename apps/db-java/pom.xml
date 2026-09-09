@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <!-- The Spring Boot BOM, which is where every version below that is not
+       written down comes from: the starters, Hibernate, HikariCP and the SQL
+       Server driver are all managed by it, so this file pins one thing (the
+       Azure identity library, which Boot does not manage) and inherits the
+       rest. -->
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>4.1.1</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>io.onek8s</groupId>
+  <artifactId>db-java</artifactId>
+  <version>0.1.0</version>
+  <name>db-java</name>
+  <description>
+    The db-hello application in Java: an Azure SQL Database read and written as
+    the tenant's own managed identity, with no password anywhere.
+  </description>
+
+  <properties>
+    <!-- 21, not the parent's 17: it is the LTS the runtime image ships, and
+         the two have to agree or the jar will not start. -->
+    <java.version>21</java.version>
+    <azure-identity.version>1.18.6</azure-identity.version>
+    <azure-core-http-jdk-httpclient.version>1.1.7</azure-core-http-jdk-httpclient.version>
+  </properties>
+
+  <dependencies>
+    <!-- The page itself. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+
+    <!-- Hibernate and Spring Data, this application's counterpart to the .NET
+         one's EF Core — with one difference that matters: db-hello owns the
+         schema and this one only uses it, so `ddl-auto` is none and there are
+         no migrations here. See src/main/resources/application.yaml. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+
+    <!-- Version from the Boot BOM. The driver is what actually asks for a
+         token, through the callback in data/EntraTokenCallback.java. -->
+    <dependency>
+      <groupId>com.microsoft.sqlserver</groupId>
+      <artifactId>mssql-jdbc</artifactId>
+    </dependency>
+
+    <!-- Not managed by Boot, so pinned here. WorkloadIdentityCredential in the
+         pod, DefaultAzureCredential on a laptop — the same two credentials the
+         .NET application picks between, from the same environment.
+
+         Netty is excluded and the JDK's own HTTP client put in its place: this
+         application makes one kind of outbound call, a token request over
+         HTTPS/1.1, and the default transport brings an event-loop framework
+         and four platforms' worth of native QUIC libraries to make it — about
+         20 MB of jar, and native code, for something java.net.http already
+         does. DbJavaApplicationTests asserts that a transport is still found,
+         because the failure mode of getting this wrong is invisible until the
+         first token request. -->
+    <dependency>
+      <groupId>com.azure</groupId>
+      <artifactId>azure-identity</artifactId>
+      <version>${azure-identity.version}</version>
+      <exclusions>
+        <exclusion>
+          <groupId>com.azure</groupId>
+          <artifactId>azure-core-http-netty</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+
+    <dependency>
+      <groupId>com.azure</groupId>
+      <artifactId>azure-core-http-jdk-httpclient</artifactId>
+      <version>${azure-core-http-jdk-httpclient.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <!-- A fixed jar name, so the Dockerfile's ENTRYPOINT does not carry the
+         version and a release does not have to change two files. -->
+    <finalName>db-java</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>

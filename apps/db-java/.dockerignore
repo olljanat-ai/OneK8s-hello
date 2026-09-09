@@ -1,0 +1,4 @@
+# Build output must come from the build stage, never from a developer's machine.
+target/
+chart/
+README.md

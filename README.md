@@ -11,10 +11,12 @@ these charts unchanged to different tenants so the two can be compared.
 ```
 apps/
 ├── hello/       # .NET 10 page showing a secret read out of the cloud's vault
-└── db-hello/    # .NET 10 page reading and writing Azure SQL with no credential
+├── db-hello/    # .NET 10 page reading and writing Azure SQL with no credential
+└── db-java/     # the same page in Java, on the same database, with no credential either
 docs/
 ├── hello-app.md
-└── db-hello-app.md
+├── db-hello-app.md
+└── db-java-app.md
 ```
 
 | Repository | Owns |
@@ -24,7 +26,7 @@ docs/
 | [OneK8s-fluxcd](https://github.com/olljanat-ai/OneK8s-fluxcd) | The same, without a hub or a promotion engine: one directory per cluster, and the commit that says which build that cluster runs. |
 | **OneK8s-hello** (this one) | What is deployed. |
 
-## The two applications
+## The three applications
 
 ### `hello` — one artefact, two clouds, two meanings
 
@@ -66,17 +68,36 @@ That script is the one place these two repositories meet: it reads the
 platform's Terraform state, so it needs a checkout of OneK8s and takes its path
 from `ONEK8S_ROOT` (default: `../OneK8s`).
 
+### `db-java` — the same thing, in another language
+
+A page that does what `db-hello` does, written with Spring Boot and Hibernate
+instead of ASP.NET Core and EF Core, deployed to
+https://azure-db-java.onek8s.lol. It is here to test a claim rather than to add
+a feature: that a workload's identity is the *cluster's* business and not the
+application's.
+
+Nothing on the platform's side of that line changes for it — the same
+ServiceAccount, the same `azure.workload.identity/use` label, the same
+federated credential, and **the same database user**, because it is the same
+identity. It needs no bootstrap of its own and no schema of its own: the
+`visits` table belongs to db-hello's migrations, and this application maps it
+and owns none of it, so both write to one table and each page lists the other's
+rows. What did change is all inside the application: a token library, where the
+token is attached to the connection, a retry loop, and a JVM's memory and
+start-up time. Full walkthrough: [docs/db-java-app.md](docs/db-java-app.md).
+
 ## Images
 
-Both applications publish to **GHCR** on every merge to `main` that touches
-them. `hello` publishes exactly one immutable tag per build, `sha-<short>`, and
-no moving tag: Kargo identifies a release by its tag, so a tag that can point
-somewhere else tomorrow would make "production runs `sha-a1b2c3d`" a statement
-with no content.
+All three applications publish to **GHCR** on every merge to `main` that
+touches them. `hello` publishes exactly one immutable tag per build,
+`sha-<short>`, and no moving tag: Kargo identifies a release by its tag, so a
+tag that can point somewhere else tomorrow would make "production runs
+`sha-a1b2c3d`" a statement with no content.
 
 ```
 ghcr.io/olljanat-ai/onek8s-hello/hello
 ghcr.io/olljanat-ai/onek8s-hello/db-hello
+ghcr.io/olljanat-ai/onek8s-hello/db-java
 ```
 
 The packages must be **public** — no cluster on any cloud has a pull secret,
@@ -90,6 +111,10 @@ public once under its package settings.
 cd apps/hello/src
 TEST_SECRET="a local value" WELCOME_MESSAGE="Hello from my laptop" dotnet run
 
+# db-java, on a laptop, against a real database (az login first)
+cd apps/db-java
+SQL_SERVER=sql-onek8s-prototype-ab12.database.windows.net SQL_DATABASE=appdb mvn spring-boot:run
+
 # the charts, as the delivery plane renders them. image.tag is required and has
 # no default: in the platform it is whatever Kargo last promoted to that stage.
 helm template hello-staging apps/hello/chart \
@@ -98,12 +123,19 @@ helm template hello-staging apps/hello/chart \
 helm template hello-production apps/hello/chart \
   --set cloud=aws --set ingress.host=aws-hello.onek8s.lol \
   --set secret.remoteKey=prototype/team-alpha/test --set image.tag=sha-0000000
+
+# the Azure SQL pair. Both take the same values, and neither of them is a
+# secret: a host name and a database name authorize nobody.
+helm template db-java-azure apps/db-java/chart \
+  --set ingress.host=azure-db-java.onek8s.lol \
+  --set sql.server=sql-onek8s-prototype-ab12.database.windows.net --set sql.database=appdb
 ```
 
-PR validation renders both charts on both stages, checks that they still satisfy
-the `restricted` Pod Security Standard the tenant namespaces enforce (non-root,
-no privilege escalation, all capabilities dropped, `RuntimeDefault` seccomp) and
-that db-hello's EF model and its migrations still agree.
+PR validation renders every chart — `hello` on both of its stages — checks that
+they still satisfy the `restricted` Pod Security Standard the tenant namespaces
+enforce (non-root, no privilege escalation, all capabilities dropped,
+`RuntimeDefault` seccomp), that db-hello's EF model and its migrations still
+agree, and that db-java builds and passes its tests.
 
 Merging to `main` builds the image; Kargo turns it into Freight and promotes it
 to staging by itself; production waits for someone to promote it.

@@ -1,11 +1,12 @@
 name: PR Validation
 
-# The applications are Helm and .NET, not Terraform: apps/*/chart is what Argo
-# CD renders on every stage's cluster, and apps/db-hello's migrations are what
-# the platform's Deploy Tenants workflow applies to the database. Both are
-# checked here for the same reason — a template error or a model that has run
-# ahead of its migrations would otherwise only surface after the merge, in a
-# failed sync or a deployment that quietly does nothing.
+# The applications are Helm, .NET and Java, not Terraform: apps/*/chart is what
+# Argo CD renders on every stage's cluster, and apps/db-hello's migrations are
+# what the platform's Deploy Tenants workflow applies to the database. All of
+# it is checked here for the same reason — a template error, a model that has
+# run ahead of its migrations, or a Java application that no longer starts
+# without a database would otherwise only surface after the merge, in a failed
+# sync or a deployment that quietly does nothing.
 on:
   pull_request:
     branches: [main]
@@ -62,18 +63,26 @@ jobs:
             exit 1
           fi
 
-      # db-hello is Azure-only, so there is one render rather than two — and
-      # both halves of sql are required, which is what these --set values are
-      # standing in for.
-      - name: The Azure SQL application
+      # The two Azure SQL applications are Azure-only, so each is one render
+      # rather than two — and both halves of sql are required, which is what
+      # these --set values are standing in for. They are rendered by the same
+      # function because they take the same values: the pair only proves
+      # anything as long as neither drifts into needing something the other
+      # does not.
+      - name: The Azure SQL applications
         run: |
-          db_hello=(
-            --set ingress.host=azure-db-hello.onek8s.lol
-            --set sql.server=sql-onek8s-prototype-ab12.database.windows.net
-            --set sql.database=appdb
-          )
-          helm lint apps/db-hello/chart "${db_hello[@]}"
-          helm template db-hello-azure apps/db-hello/chart "${db_hello[@]}" > /dev/null
+          render() {  # <app> <host>
+            local app="$1" host="$2"
+            local values=(
+              --set ingress.host="$host"
+              --set sql.server=sql-onek8s-prototype-ab12.database.windows.net
+              --set sql.database=appdb
+            )
+            helm lint "apps/$app/chart" "${values[@]}"
+            helm template "$app-azure" "apps/$app/chart" "${values[@]}" > /dev/null
+          }
+          render db-hello azure-db-hello.onek8s.lol
+          render db-java  azure-db-java.onek8s.lol
 
       # Tenant namespaces enforce the "restricted" Pod Security Standard (the
       # OneK8s repository's modules/tenant-namespace), whose central demand is
@@ -121,6 +130,11 @@ jobs:
             --set sql.server=sql-onek8s-prototype-ab12.database.windows.net \
             --set sql.database=appdb
 
+          check db-java \
+            --set ingress.host=azure-db-java.onek8s.lol \
+            --set sql.server=sql-onek8s-prototype-ab12.database.windows.net \
+            --set sql.database=appdb
+
           exit $status
 
   # db-hello's schema is code-first: the EF Core model in apps/db-hello/src is
@@ -151,6 +165,31 @@ jobs:
           dotnet restore apps/db-hello/src
           ./.ef-tools/dotnet-ef migrations has-pending-model-changes \
             --project apps/db-hello/src --no-color
+
+  # The image builds already compile all three applications on a pull request,
+  # so this job is here for what compiling cannot say. db-java's tests need no
+  # database and no Azure subscription, and they assert the three things that
+  # would otherwise be discovered in a cluster: that the application starts with
+  # nothing reachable (the free-tier database is asleep for most of every hour),
+  # that a transport for the token request is still on the classpath after the
+  # POM's Netty-for-JDK-client swap, and that a failure reaches the browser as a
+  # page naming its fix rather than as a stack trace. It is db-java's equivalent
+  # of the migrations job above.
+  java:
+    name: maven (db-java)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          # Must match <java.version> in apps/db-java/pom.xml and the images in
+          # apps/db-java/Dockerfile.
+          java-version: "21"
+          distribution: temurin
+          cache: maven
+
+      - name: Build and test
+        run: mvn -B --file apps/db-java/pom.xml verify
 
   # The bootstrap is the one script that reaches across into the platform
   # repository, so a syntax error in it is caught here rather than in the middle

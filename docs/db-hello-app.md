@@ -287,6 +287,12 @@ own answer to “who is this connection?”, and it names the tenant's managed
 identity. Every page view inserts a row and reads the last ten back, so the
 table is both the demonstration and the only state the application has.
 
+Rows written by `db-java-…` pods are [db-java](db-java-app.md), the Java
+application on the same database: it maps this table as the same tenant
+identity, and therefore as the same database user. It owns none of the schema —
+the EF Core model here remains the only description of `visits` — so a model
+change is made in this application and followed by that one.
+
 Three states are ordinary rather than broken, and each names its own fix:
 
 | Page says | Fix |
@@ -355,9 +361,10 @@ TLSStore serves the platform wildcard.
   but a **private endpoint** is the stronger answer. It needs private DNS the
   platform does not run yet, and it would put the database out of reach of the
   tenants deploy — which would then have to run somewhere inside the VNet.
-- **One database, shared by tenants.** The free offer allows ten, but this is
-  one database with one table; a second tenant would get its own user in the
-  *same* database and could read the first one's rows. Isolation here is the
+- **One database, shared by tenants — and one table, shared by two
+  applications.** The free offer allows ten, but this is one database with one
+  table; a second tenant would get its own user in the *same* database and
+  could read the first one's rows. Isolation here is the
   Entra identity and the roles, not the schema. Per-tenant databases, or
   row-level security keyed on `DATABASE_PRINCIPAL_ID()`, is the next step and
   is deliberately not taken in a lab that has one application.

@@ -51,6 +51,10 @@ has run.
 
 Every page view is a row: the app adds a `Visit`, saves it, then reads the last
 ten back with LINQ and prints them, along with who the database thinks it is.
+Some of those rows are not its own — [db-java](../db-java) maps this same table
+and writes to it as the same tenant identity, so the two applications share one
+`visits` table and each page lists the other's rows. This model is the only
+description of it: db-java owns no schema and applies no migrations.
 
 ```
 pod (SA: workload)

@@ -1,0 +1,20 @@
+apiVersion: v2
+name: db-java
+description: >-
+  The db-hello application in Java: an Azure SQL Database read and written as
+  the tenant's own managed identity — no connection string, no password and no
+  Secret of any kind, only a host name and a database name.
+type: application
+
+# The chart's own version. Bump it when the templates change; the image tag is
+# values.image.tag and moves independently.
+version: 0.1.0
+
+# Informational only — the deployed tag comes from values.image.tag.
+appVersion: "0.1.0"
+
+keywords:
+  - onek8s
+  - example
+  - azure-sql
+  - java

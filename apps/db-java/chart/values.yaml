@@ -1,0 +1,93 @@
+# Defaults for a single manual `helm install`. In the platform every value that
+# is environment-specific — environment, tenant, ingress.host and both halves
+# of sql — is set by the "db-java" ApplicationSet in the OneK8s-argocd
+# repository, which takes the database's coordinates from the Azure
+# foundation's outputs.
+#
+# This is db-hello's chart with two numbers changed and one probe added, and
+# that is the point of having it: the application is a different language, a
+# different runtime and a different data-access library, and the platform's
+# side of the arrangement — the ServiceAccount, the workload identity label,
+# the ingress, the non-root pod — is identical. The JVM is heavier and slower
+# to start than the .NET runtime, so it gets more memory and a startup probe;
+# nothing else about being a tenant workload changes.
+
+# Which cluster this release landed on. Shown on the page and used as a label.
+cloud: azure
+
+# The environment the foundations were deployed for. Shown on the page.
+environment: prototype
+
+# The tenant whose namespace this is released into. Its ServiceAccount is the
+# whole authentication story: annotated with the tenant's user-assigned managed
+# identity by modules/tenant-namespace/azure, federated to exactly this
+# namespace and this ServiceAccount, and given a user in the database by the
+# tenants stack's own deploy — the same user db-hello connects as, because it
+# is the same identity.
+tenant: team-alpha
+
+# ServiceAccount the pod runs as. This is NOT cosmetic here: it is the identity
+# that authenticates to Azure SQL. modules/tenant-namespace creates it.
+serviceAccountName: workload
+
+# Empty falls back to the app's own default ("Welcome to OneK8s!").
+welcomeMessage: ""
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/olljanat-ai/onek8s-hello/db-java
+  # "latest" is the moving tag the Build DB Java App workflow pushes on every
+  # merge to main. Pin an immutable "sha-<short>" tag for a reproducible
+  # deploy — see docs/db-java-app.md.
+  tag: latest
+  pullPolicy: Always
+
+service:
+  port: 80
+
+# Always rendered: the app exists to be looked at, so a release without a way
+# in is not a case worth supporting.
+ingress:
+  # Required. One label deep, because that is what the *.onek8s.lol wildcard
+  # covers. The ApplicationSet sets "azure-db-java.onek8s.lol".
+  host: ""
+  # Empty leaves the class to the cluster default, which every foundation sets
+  # to Traefik. No TLS section and no certificate: Traefik's default TLSStore
+  # serves the platform wildcard.
+  className: ""
+
+# The database — the same server and the same database db-hello uses, and the
+# same table inside it. Both values are required and neither is a secret: a
+# host name and a database name are public, and possession of them grants
+# nothing. Authorization is the tenant identity's database user, which lives in
+# the database and nowhere else.
+sql:
+  # Required. "<server>.database.windows.net", from the Azure foundation's
+  # sql_server_fqdn output.
+  server: ""
+  # Required. The foundation's sql_database_name output.
+  database: ""
+  # A paused serverless database can take the best part of a minute to wake up,
+  # and the first connection is the one that waits for it.
+  connectTimeoutSeconds: 30
+
+# A JVM, so these are not db-hello's numbers: that pod is happy in 256Mi and
+# starts in under a second, and this one holds Tomcat, Hibernate and a
+# connection pool. The container asks the JVM to size its heap from the limit
+# (-XX:MaxRAMPercentage in the Dockerfile) rather than repeating a number here,
+# so raising the limit is the only edit needed to give it more room. CPU is
+# requested modestly and limited generously because class loading is the one
+# genuinely CPU-hungry moment in this pod's life and it happens once.
+resources:
+  requests:
+    cpu: 100m
+    memory: 384Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
